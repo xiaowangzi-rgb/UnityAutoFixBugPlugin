@@ -81,14 +81,14 @@ namespace JoyCastle.BugReporter {
             var root = _panelInstance.transform;
 
             // CollectBtn — 上报按钮
-            var collectBtnTr = root.Find("CollectBtn");
+            var collectBtnTr = root.Find("Panel/CollectBtn");
             if (collectBtnTr != null) {
                 _collectBtn = collectBtnTr.GetComponent<Button>();
                 _collectBtn?.onClick.AddListener(OnSubmitClicked);
             }
 
             // InfoItem 模板（在 Content 下）
-            var contentTr = root.Find("CollectInfoPanel/Scroll View/Viewport/Content");
+            var contentTr = root.Find("Panel/CollectInfoPanel/Scroll View/Viewport/Content");
             if (contentTr != null) {
                 _contentParent = contentTr;
                 var itemTr = contentTr.Find("InfoItem");
@@ -99,7 +99,7 @@ namespace JoyCastle.BugReporter {
             }
 
             // 截图 RawImage
-            var rawImgTr = root.Find("ScreenshotPanel/_ScreenShotRawImage");
+            var rawImgTr = root.Find("Panel/ScreenshotPanel/_ScreenShotRawImage");
             if (rawImgTr != null) {
                 _screenshotRawImage = rawImgTr.GetComponent<RawImage>();
 
@@ -225,7 +225,7 @@ namespace JoyCastle.BugReporter {
                 var keyText = item.transform.Find("key")?.GetComponent<Text>();
                 var valueText = item.transform.Find("value")?.GetComponent<Text>();
 
-                if (keyText != null) keyText.text = kv.Key;
+                if (keyText != null) keyText.text = kv.Key + ":";
                 if (valueText != null) {
                     valueText.text = kv.Value != null && kv.Value.Length > 200
                         ? kv.Value.Substring(0, 200) + "..."
