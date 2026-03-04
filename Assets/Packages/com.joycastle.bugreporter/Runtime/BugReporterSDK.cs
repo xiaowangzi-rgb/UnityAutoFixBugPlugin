@@ -84,7 +84,7 @@ namespace JoyCastle.BugReporter {
         // ── 内部逻辑 ──
 
         private void Setup() {
-            _uploader = new ReportUploader(_config.serverUrl, _config.uploadTimeout);
+            _uploader = new ReportUploader(_config.serverUrl, _config.webhookToken, _config.uploadTimeout);
 
             // 注册内置采集器
             s_collectors.Add(new DeviceCollector());

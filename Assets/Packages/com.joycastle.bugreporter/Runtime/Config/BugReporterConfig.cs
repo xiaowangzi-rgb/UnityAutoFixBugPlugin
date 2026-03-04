@@ -9,6 +9,9 @@ namespace JoyCastle.BugReporter {
         [Tooltip("Bug 上报服务器地址")]
         public string serverUrl = "";
 
+        [Tooltip("Webhook 认证 Token")]
+        public string webhookToken = "";
+
         [Tooltip("项目标识符")]
         public string appId = "";
 
