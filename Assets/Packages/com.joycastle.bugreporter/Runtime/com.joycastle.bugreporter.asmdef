@@ -1,7 +1,7 @@
 {
   "name": "com.joycastle.bugreporter",
   "rootNamespace": "JoyCastle.BugReporter",
-  "references": [],
+  "references": ["NativeFilePicker.Runtime"],
   "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,

@@ -14,6 +14,7 @@ namespace JoyCastle.BugReporter {
         private FpsCollector _fpsCollector;
         private ScreenshotCollector _screenshotCollector;
         private LogCollector _logCollector;
+        private VideoCollector _videoCollector;
         private BugReportPanel _panel;
 
         // ── 公开 API ──
@@ -39,7 +40,7 @@ namespace JoyCastle.BugReporter {
 
         public static void RegisterCollector(IInfoCollector collector) {
             if (collector == null) return;
-            s_collectors.Add(collector);
+            s_collectors.Insert(0, collector);
         }
 
         public static void ShowReportUI() {
@@ -65,6 +66,11 @@ namespace JoyCastle.BugReporter {
             return _instance._screenshotCollector;
         }
 
+        public static VideoCollector GetVideoCollector() {
+            EnsureInitialized();
+            return _instance._videoCollector;
+        }
+
         public static BugReporterConfig GetConfig() {
             EnsureInitialized();
             return _config;
@@ -82,7 +88,9 @@ namespace JoyCastle.BugReporter {
 
             // 注册内置采集器
             s_collectors.Add(new DeviceCollector());
-
+            // 注册BuildInfo采集器
+            s_collectors.Add(new BuildInfoCollector());
+            // 注册日志采集器
             if (_config.enableLogCollector) {
                 _logCollector = new LogCollector(
                     _config.maxLogLines,
@@ -95,18 +103,21 @@ namespace JoyCastle.BugReporter {
                 }
                 s_collectors.Add(_logCollector);
             }
-
+            // 注册Fps采集器
             if (_config.enableFpsCollector) {
                 _fpsCollector = new FpsCollector();
                 s_collectors.Add(_fpsCollector);
             }
-
+            // 注册截图采集器
             if (_config.enableScreenshot) {
                 _screenshotCollector = new ScreenshotCollector();
                 s_collectors.Add(_screenshotCollector);
             }
-
-            s_collectors.Add(new BuildInfoCollector());
+            // 注册视频采集器
+            if (_config.enableVideoCollector) {
+                _videoCollector = new VideoCollector(_config.maxVideoSizeMB);
+                s_collectors.Add(_videoCollector);
+            }
         }
 
         private void Update() {

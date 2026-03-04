@@ -7,5 +7,8 @@
   "author": {
     "name": "JoyCastle"
   },
-  "keywords": ["bug", "reporter", "feedback", "QA"]
+  "keywords": ["bug", "reporter", "feedback", "QA"],
+  "dependencies": {
+    "com.yasirkula.nativefilepicker": "https://github.com/yasirkula/UnityNativeFilePicker.git"
+  }
 }

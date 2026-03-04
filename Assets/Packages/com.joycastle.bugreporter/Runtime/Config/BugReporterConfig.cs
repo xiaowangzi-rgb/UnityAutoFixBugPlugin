@@ -27,6 +27,11 @@ namespace JoyCastle.BugReporter {
         [Tooltip("项目方指定的日志文件路径，留空则只采集运行时日志")]
         public string[] logFilePaths = new string[0];
 
+        [Header("视频采集")]
+        public bool enableVideoCollector = true;
+        [Tooltip("视频文件大小上限（MB）")]
+        public int maxVideoSizeMB = 100;
+
         [Header("上报配置")]
         [Tooltip("HTTP 请求超时时间(秒)")]
         public int uploadTimeout = 30;
