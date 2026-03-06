@@ -18,55 +18,18 @@ namespace JoyCastle.BugReporter {
         }
 
         public IEnumerator Upload(BugReport report, Action<bool, string> onComplete = null) {
+            var metadata = BugReporterSDK.GetFieldMetadata();
+            if (!metadata.IsReady) {
+                Debug.LogError("[BugReporter] Cannot upload: field metadata not loaded.");
+                onComplete?.Invoke(false, "Field metadata not loaded");
+                yield break;
+            }
+
             var form = new List<IMultipartFormSection>();
 
             // ── 构建 data JSON ──
             var fields = report.Fields ?? new Dictionary<string, string>();
-            var dataMap = new Dictionary<string, string>();
-
-            // 映射字段 → 后端 field_key
-            dataMap["name"] = GetField(fields, "issueTitle", report.Description ?? "");
-            dataMap["description"] = GetField(fields, "issueDec", "");
-            dataMap["priority"] = GetField(fields, "priority", "2");
-            dataMap["field_805908"] = GetField(fields, "significance", "_ctjyqcki");
-            dataMap["issue_stage"] = GetField(fields, "discoveryStage", "stage_test");
-            dataMap["userId"] = GetField(fields, "userId", "");
-
-            var deviceModel = GetField(fields, "deviceModel", "");
-            var osVersion = GetField(fields, "osVersion", "");
-            dataMap["device"] = !string.IsNullOrEmpty(deviceModel) && !string.IsNullOrEmpty(osVersion)
-                ? $"{deviceModel} / {osVersion}"
-                : deviceModel + osVersion;
-
-            dataMap["version"] = GetField(fields, "versionName", "");
-            dataMap["branch"] = GetField(fields, "gitBranch", "");
-            dataMap["commit"] = GetField(fields, "gitCommit", "");
-            dataMap["appId"] = report.AppId ?? "";
-
-            // 解决版本 & 发现版本：统一用 bug 版本
-            var issueVersion = GetField(fields, "issueVersion", "");
-            dataMap["resolve_version"] = issueVersion;
-            dataMap["discovery_version"] = issueVersion;
-
-            // 其他未映射的字段也放进 data
-            var mappedKeys = new HashSet<string> {
-                "issueTitle", "issueDec", "issueVersion",
-                "priority", "significance", "discoveryStage",
-                "userId", "deviceModel", "osVersion",
-                "versionName", "gitBranch", "gitCommit"
-            };
-            foreach (var kv in fields) {
-                if (!mappedKeys.Contains(kv.Key)) {
-                    // 过滤一些不需要的log
-                    if (kv.Key.Equals("runtimeLog")) {
-                        continue;
-                    }
-                    dataMap[kv.Key] = kv.Value ?? "";
-                }
-            }
-
-            // 序列化为 JSON
-            var dataJson = DictToJson(dataMap);
+            var dataJson = BuildDataJson(fields, metadata, report);
             form.Add(new MultipartFormDataSection("data", dataJson, Encoding.UTF8, "application/json"));
 
             // ── 所有文件统一用 "files" 作为字段名 ──
@@ -99,11 +62,12 @@ namespace JoyCastle.BugReporter {
             Debug.Log(sb.ToString());
 
             // ── 发送请求 ──
-            using var request = UnityWebRequest.Post(_serverUrl, form);
+            var uploadUrl = _serverUrl.TrimEnd('/') + "/api/issue/add";
+            using var request = UnityWebRequest.Post(uploadUrl, form);
             request.timeout = _timeout;
 
             if (!string.IsNullOrEmpty(_webhookToken)) {
-                request.SetRequestHeader("X-Webhook-Token", _webhookToken);
+                request.SetRequestHeader("X-API-Token", _webhookToken);
             }
 
             yield return request.SendWebRequest();
@@ -112,36 +76,157 @@ namespace JoyCastle.BugReporter {
                 Debug.Log($"[BugReporter] Upload success: {request.downloadHandler.text}");
                 onComplete?.Invoke(true, request.downloadHandler.text);
             } else {
-                Debug.LogWarning($"[BugReporter] Upload failed: {request.error}");
+                var responseBody = request.downloadHandler != null ? request.downloadHandler.text : "";
+                Debug.LogWarning($"[BugReporter] Upload failed: {request.error}\n[Response]: {responseBody}");
                 onComplete?.Invoke(false, request.error);
             }
         }
 
-        private static string GetField(Dictionary<string, string> fields, string key,
-            string fallback = "") {
-            return fields.TryGetValue(key, out var value) && !string.IsNullOrEmpty(value)
-                ? value
-                : fallback;
-        }
-
         /// <summary>
-        /// 简单的 Dictionary → JSON 序列化，避免引入额外依赖。
+        /// 根据字段元数据动态构建 data JSON。
+        /// 按 field_type 生成正确的传值格式。
         /// </summary>
-        private static string DictToJson(Dictionary<string, string> dict) {
+        private string BuildDataJson(Dictionary<string, string> fields, FieldMetadataManager metadata, BugReport report) {
             var sb = new StringBuilder();
             sb.Append("{");
             var first = true;
-            foreach (var kv in dict) {
-                if (!first) sb.Append(",");
-                sb.Append("\"");
-                sb.Append(EscapeJson(kv.Key));
-                sb.Append("\":\"");
-                sb.Append(EscapeJson(kv.Value));
-                sb.Append("\"");
-                first = false;
+
+            // 采集器产出的字段映射到后端 field_key
+            // 采集器 key → 后端 field_key 的映射
+            var collectorToFieldKey = new Dictionary<string, string> {
+                ["issueTitle"] = "name",
+                ["issueDec"] = "description",
+            };
+
+            // 先把采集器字段按映射转换
+            var mergedFields = new Dictionary<string, string>();
+            foreach (var kv in fields) {
+                if (collectorToFieldKey.TryGetValue(kv.Key, out var mappedKey)) {
+                    mergedFields[mappedKey] = kv.Value;
+                } else {
+                    mergedFields[kv.Key] = kv.Value;
+                }
             }
+
+            // 遍历元数据中定义的所有字段，按 field_type 格式化
+            foreach (var fieldDef in metadata.Fields.Values) {
+                if (fieldDef.field_type == "business") continue; // 无需传递
+
+                var key = fieldDef.field_key;
+                mergedFields.TryGetValue(key, out var rawValue);
+
+                // 跳过空值（非必填字段）
+                if (string.IsNullOrEmpty(rawValue) && !fieldDef.required) continue;
+
+                if (!first) sb.Append(",");
+                first = false;
+
+                sb.Append("\"").Append(EscapeJson(key)).Append("\":");
+
+                switch (fieldDef.field_type) {
+                    case "select":
+                        // select 类型必须传 {"label":"xxx","value":"xxx"}
+                        AppendSelectValue(sb, fieldDef, rawValue);
+                        break;
+
+                    case "work_item_related_multi_select":
+                        // 版本类字段传数字数组
+                        AppendVersionArray(sb, rawValue);
+                        break;
+
+                    case "multi_user":
+                        // 多选用户传字符串数组
+                        sb.Append("[");
+                        if (!string.IsNullOrEmpty(rawValue)) {
+                            sb.Append("\"").Append(EscapeJson(rawValue)).Append("\"");
+                        }
+                        sb.Append("]");
+                        break;
+
+                    case "text":
+                    case "multi_text":
+                    default:
+                        // 文本类型传字符串
+                        sb.Append("\"").Append(EscapeJson(rawValue ?? "")).Append("\"");
+                        break;
+                }
+            }
+
+            // 附加不在元数据里的额外字段（如 device、version、appId 等采集器信息）
+            var metadataKeys = new HashSet<string>(metadata.Fields.Keys);
+            // 也排除已映射的采集器 key
+            var skipKeys = new HashSet<string>(collectorToFieldKey.Keys);
+            foreach (var kv in fields) {
+                var actualKey = collectorToFieldKey.TryGetValue(kv.Key, out var mapped) ? mapped : kv.Key;
+                if (metadataKeys.Contains(actualKey)) continue;
+                if (skipKeys.Contains(kv.Key) && metadataKeys.Contains(mapped ?? "")) continue;
+                if (kv.Key == "runtimeLog") continue;
+
+                if (!first) sb.Append(",");
+                first = false;
+                sb.Append("\"").Append(EscapeJson(kv.Key)).Append("\":\"").Append(EscapeJson(kv.Value ?? "")).Append("\"");
+            }
+
+            // appId
+            if (!string.IsNullOrEmpty(report.AppId)) {
+                if (!first) sb.Append(",");
+                sb.Append("\"appId\":\"").Append(EscapeJson(report.AppId)).Append("\"");
+            }
+
             sb.Append("}");
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// select 类型：根据 rawValue 在 options 中查找匹配项，输出 {"label":"xxx","value":"xxx"}。
+        /// rawValue 可以是 option 的 value 或 label。
+        /// </summary>
+        private void AppendSelectValue(StringBuilder sb, FieldDefinition fieldDef, string rawValue) {
+            if (fieldDef.options != null && !string.IsNullOrEmpty(rawValue)) {
+                foreach (var opt in fieldDef.options) {
+                    if (opt.value == rawValue || opt.label == rawValue) {
+                        sb.Append("{\"label\":\"").Append(EscapeJson(opt.label))
+                          .Append("\",\"value\":\"").Append(EscapeJson(opt.value))
+                          .Append("\"}");
+                        return;
+                    }
+                }
+            }
+
+            // 找不到匹配项：用第一个选项作为默认值（如果有的话）
+            if (fieldDef.options != null && fieldDef.options.Count > 0) {
+                var fallback = fieldDef.options[0];
+                sb.Append("{\"label\":\"").Append(EscapeJson(fallback.label))
+                  .Append("\",\"value\":\"").Append(EscapeJson(fallback.value))
+                  .Append("\"}");
+            } else {
+                sb.Append("null");
+            }
+        }
+
+        /// <summary>
+        /// 版本类字段：传数字数组 [6839092028]。
+        /// rawValue 可能是逗号分隔的多个值。
+        /// </summary>
+        private void AppendVersionArray(StringBuilder sb, string rawValue) {
+            sb.Append("[");
+            if (!string.IsNullOrEmpty(rawValue)) {
+                var parts = rawValue.Split(',');
+                var first = true;
+                foreach (var part in parts) {
+                    var trimmed = part.Trim();
+                    if (string.IsNullOrEmpty(trimmed)) continue;
+                    if (!first) sb.Append(",");
+                    first = false;
+                    // 尝试作为数字输出（去掉引号）
+                    if (long.TryParse(trimmed, out _)) {
+                        sb.Append(trimmed);
+                    } else {
+                        sb.Append("\"").Append(EscapeJson(trimmed)).Append("\"");
+                    }
+                }
+            }
+            sb.Append("]");
         }
 
         private static string EscapeJson(string s) {

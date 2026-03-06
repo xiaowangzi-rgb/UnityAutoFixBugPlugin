@@ -6,10 +6,10 @@ namespace JoyCastle.BugReporter {
         menuName = "BugReporter/Config")]
     public class BugReporterConfig : ScriptableObject {
         [Header("服务端")]
-        [Tooltip("Bug 上报服务器地址")]
+        [Tooltip("Bug 上报服务器 Base URL，如：http://192.168.71.209:23333")]
         public string serverUrl = "";
 
-        [Tooltip("Webhook 认证 Token")]
+        [Tooltip("API 认证 Token")]
         public string webhookToken = "";
 
         [Tooltip("项目标识符")]

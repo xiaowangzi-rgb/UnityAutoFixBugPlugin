@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Networking;
 
 namespace JoyCastle.BugReporter {
     public class BugReporterSDK : MonoBehaviour {
@@ -9,6 +10,7 @@ namespace JoyCastle.BugReporter {
         private static BugReporterConfig _config;
         private static readonly List<IInfoCollector> s_collectors = new();
         private static bool s_initialized;
+        private static FieldMetadataManager s_fieldMetadata = new();
 
         private ReportUploader _uploader;
         private FpsCollector _fpsCollector;
@@ -27,12 +29,16 @@ namespace JoyCastle.BugReporter {
 
             _config = config;
             s_collectors.Clear();
+            s_fieldMetadata = new FieldMetadataManager();
 
             // 创建持久化 GameObject
             var go = new GameObject("[BugReporterSDK]");
             DontDestroyOnLoad(go);
             _instance = go.AddComponent<BugReporterSDK>();
             _instance.Setup();
+
+            // 启动时拉取字段元数据
+            _instance.StartCoroutine(_instance.FetchFieldMetadata());
 
             s_initialized = true;
             Debug.Log("[BugReporter] Initialized.");
@@ -45,6 +51,10 @@ namespace JoyCastle.BugReporter {
 
         public static void ShowReportUI() {
             EnsureInitialized();
+            if (!s_fieldMetadata.IsReady) {
+                Debug.LogWarning("[BugReporter] Field metadata not loaded. Cannot show report UI.");
+                return;
+            }
             if (_instance._panel == null) {
                 _instance._panel = _instance.gameObject.AddComponent<BugReportPanel>();
             }
@@ -53,6 +63,10 @@ namespace JoyCastle.BugReporter {
 
         public static void SubmitSilently(string description = "") {
             EnsureInitialized();
+            if (!s_fieldMetadata.IsReady) {
+                Debug.LogWarning("[BugReporter] Field metadata not loaded. Cannot submit report.");
+                return;
+            }
             _instance.StartCoroutine(_instance.DoSubmit(description));
         }
 
@@ -80,6 +94,27 @@ namespace JoyCastle.BugReporter {
             EnsureInitialized();
             return _instance._uploader;
         }
+
+        /// <summary>
+        /// 获取 SDK MonoBehaviour 实例（用于在面板隐藏时执行协程）。
+        /// </summary>
+        public static BugReporterSDK GetInstance() {
+            EnsureInitialized();
+            return _instance;
+        }
+
+        /// <summary>
+        /// 获取字段元数据管理器。
+        /// </summary>
+        public static FieldMetadataManager GetFieldMetadata() {
+            EnsureInitialized();
+            return s_fieldMetadata;
+        }
+
+        /// <summary>
+        /// 字段元数据是否已加载成功。
+        /// </summary>
+        public static bool IsFieldMetadataReady => s_fieldMetadata.IsReady;
 
         // ── 内部逻辑 ──
 
@@ -117,6 +152,46 @@ namespace JoyCastle.BugReporter {
             if (_config.enableVideoCollector) {
                 _videoCollector = new VideoCollector(_config.maxVideoSizeMB);
                 s_collectors.Add(_videoCollector);
+            }
+        }
+
+        /// <summary>
+        /// 启动时拉取字段元数据。失败则不允许上报缺陷。
+        /// </summary>
+        private IEnumerator FetchFieldMetadata() {
+            if (string.IsNullOrEmpty(_config.serverUrl)) {
+                Debug.LogError("[BugReporter] serverUrl is not configured. Bug reporting disabled.");
+                yield break;
+            }
+
+            var fieldsUrl = _config.serverUrl.TrimEnd('/') + "/api/issue/fields";
+            using var request = UnityWebRequest.Get(fieldsUrl);
+            request.timeout = 10;
+
+            if (!string.IsNullOrEmpty(_config.webhookToken)) {
+                request.SetRequestHeader("X-API-Token", _config.webhookToken);
+            }
+
+            Debug.Log($"[BugReporter] Fetching field metadata from: {fieldsUrl}");
+            yield return request.SendWebRequest();
+
+            if (request.result != UnityWebRequest.Result.Success) {
+                Debug.LogError($"[BugReporter] Failed to fetch field metadata: {request.error}. Bug reporting disabled.");
+                yield break;
+            }
+
+            try {
+                var json = request.downloadHandler.text;
+                var response = JsonUtility.FromJson<FieldsResponse>(json);
+                if (response?.fields == null || response.fields.Count == 0) {
+                    Debug.LogError("[BugReporter] Field metadata is empty. Bug reporting disabled.");
+                    yield break;
+                }
+
+                s_fieldMetadata.Load(response.fields);
+                Debug.Log($"[BugReporter] Field metadata loaded: {response.fields.Count} fields.");
+            } catch (Exception e) {
+                Debug.LogError($"[BugReporter] Failed to parse field metadata: {e.Message}. Bug reporting disabled.");
             }
         }
 
@@ -179,6 +254,7 @@ namespace JoyCastle.BugReporter {
         private void OnDestroy() {
             _logCollector?.Dispose();
             s_collectors.Clear();
+            s_fieldMetadata = new FieldMetadataManager();
             s_initialized = false;
         }
     }

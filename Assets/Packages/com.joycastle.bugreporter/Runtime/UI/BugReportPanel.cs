@@ -14,8 +14,8 @@ namespace JoyCastle.BugReporter {
     ///   - CollectBtn : Button，点击上报
     ///   - CollectInfoPanel/Scroll View/Viewport/Content : 信息列表容器
     ///   - CollectInfoPanel/Scroll View/Viewport/Content/InfoItem : 模板（key + value）
-    ///   - ScreenshotPanel/_ScreenShotRawImage : RawImage，展示截图
-    ///   - ScreenshotPanel/_ScreenShotRawImage/GetBtn : Button，点击截图
+    ///   - CollectInfoPanel/Scroll View/Viewport/Content/InputPrefab_Dropdown : Dropdown 模板（key + Dropdown）
+    ///   - CollectInfoPanel/Scroll View/Viewport/Content/GetScreenShot_Btn : 截图按钮
     /// </summary>
     public class BugReportPanel : MonoBehaviour {
         private const string DefaultPrefabPath = "BugReporter/BugReportPanel";
@@ -25,7 +25,8 @@ namespace JoyCastle.BugReporter {
 
         // UI 引用
         private Button _collectBtn;
-        private Button _getBtn;
+        private Button _screenshotBtn;
+        private Text _screenshotBtnText;
         private Button _selectVideoBtn;
         private Button _foldBtn;
         private Text _foldBtnText;
@@ -34,31 +35,16 @@ namespace JoyCastle.BugReporter {
         private GameObject _infoItemTemplate;
         private GameObject _issueTitleItem;
         private InputField _issueTitleInput;
-        private GameObject _issueDecItem;
-        private InputField _issueDecInput;
-        private GameObject _issueVersionItem;
-        private InputField _issueVersionInput;
+        private GameObject _screenshotBtnItem;
         private GameObject _videoItem;
         private GameObject _foldItem;
-        private RawImage _screenshotRawImage;
+        private GameObject _dropdownTemplate; // InputPrefab_Dropdown 模板
+        private GameObject _screenshotPreview; // 动态创建的截图预览界面
+        private bool _hasScreenshot; // 是否已截图
 
-        // Dropdown 引用
-        private Dropdown _priorityDropdown;
-        private Dropdown _significanceDropdown;
-        private Dropdown _discoveryStageDropdown;
-        private GameObject _priorityItem;
-        private GameObject _significanceItem;
-        private GameObject _discoveryStageItem;
-
-        // Dropdown 选项对应的后端 ID
-        private static readonly string[] PriorityIds = { "0", "1", "2", "99" };
-        private static readonly string[] SignificanceIds = {
-            "n53036kov", "l9rakulgc", "_ctjyqcki", "4jg47d2um"
-        };
-        private static readonly string[] DiscoveryStageIds = {
-            "stage_test", "0xta7xoxa", "stage_smoke", "stage_online",
-            "8n8_7zgxy", "bd893ou5c", "pfdvxqogh"
-        };
+        // 动态 Dropdown：field_key → (Dropdown, FieldDefinition)
+        private readonly Dictionary<string, Dropdown> _dynamicDropdowns = new();
+        private readonly List<GameObject> _dynamicDropdownItems = new();
 
         // 采集信息展开/收起状态
         private bool _infoExpanded;
@@ -78,6 +64,11 @@ namespace JoyCastle.BugReporter {
         public void Show() {
             if (_panelInstance != null) return;
 
+            if (!BugReporterSDK.IsFieldMetadataReady) {
+                Debug.LogWarning("[BugReporter] Field metadata not loaded. Cannot show report UI.");
+                return;
+            }
+
             var prefab = _customPrefab != null
                 ? _customPrefab
                 : Resources.Load<GameObject>(DefaultPrefabPath);
@@ -91,6 +82,7 @@ namespace JoyCastle.BugReporter {
 
             _panelInstance = Instantiate(prefab, transform);
             BindUI();
+            CreateDynamicDropdowns();
             _panelInstance.SetActive(true);
 
             // 打开时立即采集并展示信息
@@ -102,7 +94,8 @@ namespace JoyCastle.BugReporter {
                 Destroy(_panelInstance);
                 _panelInstance = null;
                 _collectBtn = null;
-                _getBtn = null;
+                _screenshotBtn = null;
+                _screenshotBtnText = null;
                 _selectVideoBtn = null;
                 _foldBtn = null;
                 _foldBtnText = null;
@@ -111,19 +104,14 @@ namespace JoyCastle.BugReporter {
                 _infoItemTemplate = null;
                 _issueTitleItem = null;
                 _issueTitleInput = null;
-                _issueDecItem = null;
-                _issueDecInput = null;
-                _issueVersionItem = null;
-                _issueVersionInput = null;
+                _screenshotBtnItem = null;
                 _videoItem = null;
                 _foldItem = null;
-                _screenshotRawImage = null;
-                _priorityDropdown = null;
-                _significanceDropdown = null;
-                _discoveryStageDropdown = null;
-                _priorityItem = null;
-                _significanceItem = null;
-                _discoveryStageItem = null;
+                _dropdownTemplate = null;
+                _screenshotPreview = null;
+                _hasScreenshot = false;
+                _dynamicDropdowns.Clear();
+                _dynamicDropdownItems.Clear();
                 _infoExpanded = false;
                 _infoItems.Clear();
                 _cachedFields = null;
@@ -153,20 +141,6 @@ namespace JoyCastle.BugReporter {
                     _issueTitleInput = issueTitleTr.Find("InputField")?.GetComponent<InputField>();
                 }
 
-                // IssueDec 描述输入项
-                var issueDecTr = contentTr.Find("InputItem_IssueDec");
-                if (issueDecTr != null) {
-                    _issueDecItem = issueDecTr.gameObject;
-                    _issueDecInput = issueDecTr.Find("InputField")?.GetComponent<InputField>();
-                }
-
-                // IssueVersion 版本输入项
-                var issueVersionTr = contentTr.Find("InputItem_IssueVersion");
-                if (issueVersionTr != null) {
-                    _issueVersionItem = issueVersionTr.gameObject;
-                    _issueVersionInput = issueVersionTr.Find("InputField")?.GetComponent<InputField>();
-                }
-
                 // 视频选择项
                 var videoTr = contentTr.Find("InputVideo_BugVideo");
                 if (videoTr != null) {
@@ -191,35 +165,28 @@ namespace JoyCastle.BugReporter {
                     }
                 }
 
-                // 优先级 Dropdown
-                var priorityTr = contentTr.Find("InputPriority_Dropdown");
-                if (priorityTr != null) {
-                    _priorityItem = priorityTr.gameObject;
-                    _priorityDropdown = priorityTr.Find("Dropdown")?.GetComponent<Dropdown>();
-                    SetupDropdown(_priorityDropdown, new List<string> {
-                        "P0_紧急", "P1_优先", "P2_一般", "P3_一般般"
-                    });
+                // GetScreenShot_Btn 截图按钮
+                var screenshotBtnTr = contentTr.Find("GetScreenShot_Btn");
+                if (screenshotBtnTr != null) {
+                    _screenshotBtnItem = screenshotBtnTr.gameObject;
+                    var getBtnTr = screenshotBtnTr.Find("GetBtn");
+                    if (getBtnTr != null) {
+                        _screenshotBtn = getBtnTr.GetComponent<Button>();
+                        _screenshotBtnText = getBtnTr.Find("Text (Legacy)")?.GetComponent<Text>();
+                        _screenshotBtn?.onClick.AddListener(OnScreenshotBtnClicked);
+                    }
                 }
 
-                // 严重程度 Dropdown
-                var significanceTr = contentTr.Find("InputSignificance_Dropdown");
-                if (significanceTr != null) {
-                    _significanceItem = significanceTr.gameObject;
-                    _significanceDropdown = significanceTr.Find("Dropdown")?.GetComponent<Dropdown>();
-                    SetupDropdown(_significanceDropdown, new List<string> {
-                        "S0_致命", "S1_严重", "S2_一般", "S3_轻微"
-                    });
-                }
+                // 清理旧的硬编码 Dropdown 节点（如果 prefab 里还有的话）
+                DestroyIfExists(contentTr, "InputPriority_Dropdown");
+                DestroyIfExists(contentTr, "InputSignificance_Dropdown");
+                DestroyIfExists(contentTr, "InputDiscoveryStage_Dropdown");
 
-                // 发现阶段 Dropdown
-                var discoveryStageTr = contentTr.Find("InputDiscoveryStage_Dropdown");
-                if (discoveryStageTr != null) {
-                    _discoveryStageItem = discoveryStageTr.gameObject;
-                    _discoveryStageDropdown = discoveryStageTr.Find("Dropdown")?.GetComponent<Dropdown>();
-                    SetupDropdown(_discoveryStageDropdown, new List<string> {
-                        "首轮测试", "交叉测试", "全功能测试", "线上阶段",
-                        "Release测试", "灰度测试", "策划验收"
-                    });
+                // InputPrefab_Dropdown 模板
+                var dropdownTemplateTr = contentTr.Find("InputPrefab_Dropdown");
+                if (dropdownTemplateTr != null) {
+                    _dropdownTemplate = dropdownTemplateTr.gameObject;
+                    _dropdownTemplate.SetActive(false);
                 }
 
                 // InfoItem 模板
@@ -230,17 +197,106 @@ namespace JoyCastle.BugReporter {
                 }
             }
 
-            // 截图 RawImage
-            var rawImgTr = root.Find("Panel/ScreenshotPanel/_ScreenShotRawImage");
-            if (rawImgTr != null) {
-                _screenshotRawImage = rawImgTr.GetComponent<RawImage>();
+        }
 
-                // GetBtn — 截图按钮（在 _ScreenShotRawImage 下）
-                var getBtnTr = rawImgTr.Find("GetBtn");
-                if (getBtnTr != null) {
-                    _getBtn = getBtnTr.GetComponent<Button>();
-                    _getBtn?.onClick.AddListener(OnGetScreenshotClicked);
+        /// <summary>
+        /// 根据字段元数据动态创建 Dropdown。
+        /// 使用 InputPrefab_Dropdown 模板实例化，放在 Fold 之前。
+        /// </summary>
+        private void CreateDynamicDropdowns() {
+            if (_contentParent == null || _dropdownTemplate == null) return;
+
+            var metadata = BugReporterSDK.GetFieldMetadata();
+            var dropdownFields = new List<FieldDefinition>();
+            foreach (var field in metadata.Fields.Values) {
+                if (field.options == null || field.options.Count == 0) continue;
+                // select 和 work_item_related_multi_select 都用 Dropdown
+                if (field.field_type != "select" && field.field_type != "work_item_related_multi_select") continue;
+                // name 和 description 用 InputField，不用 Dropdown
+                if (field.field_key == "name" || field.field_key == "description") continue;
+                // 跳过"出自测试用例"字段
+                if (field.field_name == "出自测试用例") continue;
+                dropdownFields.Add(field);
+            }
+
+            // 找到 InputVideo_BugVideo 的 sibling index，动态 Dropdown 插在它前面
+            var videoIndex = _videoItem != null ? _videoItem.transform.GetSiblingIndex() : _contentParent.childCount;
+
+            for (var i = 0; i < dropdownFields.Count; i++) {
+                var field = dropdownFields[i];
+
+                // 对 work_item_related_multi_select（版本类）选项按 value 数字从大到小排序
+                if (field.field_type == "work_item_related_multi_select") {
+                    field.options.Sort((a, b) => {
+                        long.TryParse(b.value, out var bv);
+                        long.TryParse(a.value, out var av);
+                        return bv.CompareTo(av);
+                    });
                 }
+
+                var itemGo = Instantiate(_dropdownTemplate, _contentParent);
+                itemGo.name = $"Dynamic_{field.field_key}";
+                itemGo.SetActive(true);
+
+                // 设置 key 标签为字段名
+                var keyText = itemGo.transform.Find("key")?.GetComponent<Text>();
+                if (keyText != null) {
+                    keyText.text = field.field_name + ":";
+                }
+
+                // 填充 Dropdown 选项
+                var dropdown = itemGo.transform.Find("Dropdown")?.GetComponent<Dropdown>();
+                if (dropdown != null) {
+                    dropdown.ClearOptions();
+                    var options = new List<string>();
+                    foreach (var opt in field.options) {
+                        options.Add(opt.label);
+                    }
+                    dropdown.AddOptions(options);
+                    dropdown.value = 0;
+                    dropdown.RefreshShownValue();
+                    _dynamicDropdowns[field.field_key] = dropdown;
+                }
+
+                // 插到 InputVideo_BugVideo 之前
+                itemGo.transform.SetSiblingIndex(videoIndex + i);
+
+                _dynamicDropdownItems.Add(itemGo);
+            }
+
+            // 创建"是否AI修复" Dropdown（非服务器字段，本地自定义）
+            CreateAiFixDropdown(videoIndex + dropdownFields.Count);
+        }
+
+        private void CreateAiFixDropdown(int siblingIndex) {
+            if (_dropdownTemplate == null || _contentParent == null) return;
+
+            var itemGo = Instantiate(_dropdownTemplate, _contentParent);
+            itemGo.name = "Dynamic_ai_fix";
+            itemGo.SetActive(true);
+
+            var keyText = itemGo.transform.Find("key")?.GetComponent<Text>();
+            if (keyText != null) {
+                keyText.text = "是否AI修复:";
+            }
+
+            var dropdown = itemGo.transform.Find("Dropdown")?.GetComponent<Dropdown>();
+            if (dropdown != null) {
+                dropdown.ClearOptions();
+                dropdown.AddOptions(new List<string> { "False", "True" });
+                dropdown.value = 0; // 默认 False
+                dropdown.RefreshShownValue();
+                _dynamicDropdowns["ai_fix"] = dropdown;
+            }
+
+            itemGo.transform.SetSiblingIndex(siblingIndex);
+            _dynamicDropdownItems.Add(itemGo);
+        }
+
+        private static void DestroyIfExists(Transform parent, string childName) {
+            var tr = parent.Find(childName);
+            if (tr != null) {
+                Destroy(tr.gameObject);
             }
         }
 
@@ -275,14 +331,19 @@ namespace JoyCastle.BugReporter {
             PopulateInfoList(_cachedFields);
         }
 
-        // ── GetBtn: 截图并刷新预览 ──
+        // ── GetScreenShot_Btn: 截图 / 预览 ──
 
-        private void OnGetScreenshotClicked() {
-            _getBtn.interactable = false;
-
-            // 先隐藏面板，截到干净的游戏画面
-            _panelInstance.SetActive(false);
-            StartCoroutine(DoCaptureScreenshot());
+        private void OnScreenshotBtnClicked() {
+            if (!_hasScreenshot) {
+                // 还没截图 → 执行截图
+                _screenshotBtn.interactable = false;
+                _panelInstance.SetActive(false);
+                // 面板被隐藏后 StartCoroutine 不能在自身执行，借用 SDK 的 MonoBehaviour
+                BugReporterSDK.GetInstance().StartCoroutine(DoCaptureScreenshot());
+            } else {
+                // 已截图 → 弹出预览
+                ShowScreenshotPreview();
+            }
         }
 
         private IEnumerator DoCaptureScreenshot() {
@@ -294,22 +355,95 @@ namespace JoyCastle.BugReporter {
                 if (result.Files != null &&
                     result.Files.TryGetValue("screenshot", out var pngBytes) &&
                     pngBytes != null) {
-                    // 更新缓存
                     _cachedFiles["screenshot"] = pngBytes;
+                    _hasScreenshot = true;
                 }
             }
 
             // 重新显示面板
             _panelInstance.SetActive(true);
 
-            // 刷新截图预览
-            if (_cachedFiles != null &&
-                _cachedFiles.TryGetValue("screenshot", out var png) && png != null) {
-                ShowScreenshot(png);
+            // 更新按钮文字
+            if (_hasScreenshot && _screenshotBtnText != null) {
+                _screenshotBtnText.text = "预览截图";
             }
 
-            if (_getBtn != null) {
-                _getBtn.interactable = true;
+            if (_screenshotBtn != null) {
+                _screenshotBtn.interactable = true;
+            }
+        }
+
+        private void ShowScreenshotPreview() {
+            if (_screenshotPreview != null) return;
+            if (_cachedFiles == null || !_cachedFiles.TryGetValue("screenshot", out var png) || png == null) return;
+
+            // 创建全屏遮罩
+            var previewGo = new GameObject("ScreenshotPreview", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            previewGo.transform.SetParent(_panelInstance.transform, false);
+            var previewRt = previewGo.GetComponent<RectTransform>();
+            previewRt.anchorMin = Vector2.zero;
+            previewRt.anchorMax = Vector2.one;
+            previewRt.offsetMin = Vector2.zero;
+            previewRt.offsetMax = Vector2.zero;
+            var bgImage = previewGo.GetComponent<Image>();
+            bgImage.color = new Color(0, 0, 0, 0.9f);
+
+            // 截图 RawImage
+            var rawImgGo = new GameObject("ScreenshotImage", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage));
+            rawImgGo.transform.SetParent(previewGo.transform, false);
+            var rawImgRt = rawImgGo.GetComponent<RectTransform>();
+            rawImgRt.anchorMin = new Vector2(0.05f, 0.1f);
+            rawImgRt.anchorMax = new Vector2(0.95f, 0.9f);
+            rawImgRt.offsetMin = Vector2.zero;
+            rawImgRt.offsetMax = Vector2.zero;
+            var rawImage = rawImgGo.GetComponent<RawImage>();
+
+            var tex = new Texture2D(2, 2);
+            if (tex.LoadImage(png)) {
+                rawImage.texture = tex;
+            }
+
+            // 关闭按钮（右上角）
+            var closeBtnGo = new GameObject("CloseBtn", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+            closeBtnGo.transform.SetParent(previewGo.transform, false);
+            var closeBtnRt = closeBtnGo.GetComponent<RectTransform>();
+            closeBtnRt.anchorMin = new Vector2(1, 1);
+            closeBtnRt.anchorMax = new Vector2(1, 1);
+            closeBtnRt.pivot = new Vector2(1, 1);
+            closeBtnRt.anchoredPosition = new Vector2(-20, -20);
+            closeBtnRt.sizeDelta = new Vector2(80, 80);
+            var closeBtnImg = closeBtnGo.GetComponent<Image>();
+            closeBtnImg.color = new Color(0.8f, 0.2f, 0.2f, 1f);
+
+            // 关闭按钮文字 "X"
+            var closeTextGo = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+            closeTextGo.transform.SetParent(closeBtnGo.transform, false);
+            var closeTextRt = closeTextGo.GetComponent<RectTransform>();
+            closeTextRt.anchorMin = Vector2.zero;
+            closeTextRt.anchorMax = Vector2.one;
+            closeTextRt.offsetMin = Vector2.zero;
+            closeTextRt.offsetMax = Vector2.zero;
+            var closeText = closeTextGo.GetComponent<Text>();
+            closeText.text = "X";
+            closeText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            closeText.fontSize = 36;
+            closeText.color = Color.white;
+            closeText.alignment = TextAnchor.MiddleCenter;
+
+            closeBtnGo.GetComponent<Button>().onClick.AddListener(CloseScreenshotPreview);
+
+            _screenshotPreview = previewGo;
+        }
+
+        private void CloseScreenshotPreview() {
+            if (_screenshotPreview != null) {
+                // 释放预览用的纹理
+                var rawImage = _screenshotPreview.GetComponentInChildren<RawImage>();
+                if (rawImage != null && rawImage.texture is Texture2D tex) {
+                    Destroy(tex);
+                }
+                Destroy(_screenshotPreview);
+                _screenshotPreview = null;
             }
         }
 
@@ -363,29 +497,30 @@ namespace JoyCastle.BugReporter {
                 Files = _cachedFiles ?? new Dictionary<string, byte[]>(),
             };
 
-            // 标题也作为字段上报
+            // 标题也作为字段上报（映射到 name）
             if (!string.IsNullOrEmpty(issueTitle)) {
                 report.Fields["issueTitle"] = issueTitle;
             }
 
-            // 描述上报（空也上报）
-            report.Fields["issueDec"] = _issueDecInput != null ? _issueDecInput.text : "";
+            // 描述固定内容上报
+            report.Fields["issueDec"] = "操作步骤：\n实际结果：\n期望结果：";
 
-            // 版本上报
-            var issueVersion = _issueVersionInput != null ? _issueVersionInput.text : "";
-            if (!string.IsNullOrEmpty(issueVersion)) {
-                report.Fields["issueVersion"] = issueVersion;
-            }
+            // 动态 Dropdown 选择项上报：传 option 的 value
+            var metadata = BugReporterSDK.GetFieldMetadata();
+            foreach (var kv in _dynamicDropdowns) {
+                var fieldKey = kv.Key;
+                var dropdown = kv.Value;
+                if (dropdown == null) continue;
 
-            // Dropdown 选择项上报（传 ID 值）
-            if (_priorityDropdown != null) {
-                report.Fields["priority"] = PriorityIds[_priorityDropdown.value];
-            }
-            if (_significanceDropdown != null) {
-                report.Fields["significance"] = SignificanceIds[_significanceDropdown.value];
-            }
-            if (_discoveryStageDropdown != null) {
-                report.Fields["discoveryStage"] = DiscoveryStageIds[_discoveryStageDropdown.value];
+                var fieldDef = metadata.Get(fieldKey);
+                if (fieldDef != null) {
+                    // 服务器元数据字段：传 option 的 value
+                    if (fieldDef.options == null || dropdown.value >= fieldDef.options.Count) continue;
+                    report.Fields[fieldKey] = fieldDef.options[dropdown.value].value;
+                } else {
+                    // 本地自定义字段（如 ai_fix）：直接传 Dropdown 显示文本
+                    report.Fields[fieldKey] = dropdown.options[dropdown.value].text;
+                }
             }
 
             // 合并视频采集器的数据
@@ -422,14 +557,19 @@ namespace JoyCastle.BugReporter {
         private void PopulateInfoList(Dictionary<string, string> fields) {
             if (_contentParent == null || _infoItemTemplate == null) return;
 
-            // 清除之前生成的 item（保留模板、IssueTitle、VideoItem、Fold、Dropdown）
+            // 收集需要保留的 GameObject
+            var keepSet = new HashSet<GameObject> {
+                _infoItemTemplate, _dropdownTemplate, _issueTitleItem,
+                _screenshotBtnItem, _videoItem, _foldItem
+            };
+            foreach (var item in _dynamicDropdownItems) {
+                keepSet.Add(item);
+            }
+
+            // 清除之前生成的 item
             for (var i = _contentParent.childCount - 1; i >= 0; i--) {
                 var child = _contentParent.GetChild(i).gameObject;
-                if (child != _infoItemTemplate && child != _issueTitleItem
-                    && child != _issueDecItem && child != _issueVersionItem
-                    && child != _videoItem && child != _foldItem
-                    && child != _priorityItem && child != _significanceItem
-                    && child != _discoveryStageItem) {
+                if (!keepSet.Contains(child)) {
                     Destroy(child);
                 }
             }
@@ -455,26 +595,5 @@ namespace JoyCastle.BugReporter {
             }
         }
 
-        private static void SetupDropdown(Dropdown dropdown, List<string> options) {
-            if (dropdown == null) return;
-            dropdown.ClearOptions();
-            dropdown.AddOptions(options);
-            dropdown.value = 0;
-            dropdown.RefreshShownValue();
-        }
-
-        private void ShowScreenshot(byte[] pngBytes) {
-            if (_screenshotRawImage == null) return;
-
-            var tex = new Texture2D(2, 2);
-            if (tex.LoadImage(pngBytes)) {
-                // 释放旧纹理
-                if (_screenshotRawImage.texture != null &&
-                    _screenshotRawImage.texture is Texture2D oldTex) {
-                    Destroy(oldTex);
-                }
-                _screenshotRawImage.texture = tex;
-            }
-        }
     }
 }
