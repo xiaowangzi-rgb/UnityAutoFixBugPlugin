@@ -129,6 +129,13 @@ namespace JoyCastle.BugReporter {
                 _collectBtn?.onClick.AddListener(OnSubmitClicked);
             }
 
+            // CloseBtn — 关闭按钮
+            var closeBtnTr = root.Find("Panel/CloseBtn");
+            if (closeBtnTr != null) {
+                var closeBtn = closeBtnTr.GetComponent<Button>();
+                closeBtn?.onClick.AddListener(Hide);
+            }
+
             // InfoItem 模板 和 InputItem_IssueTitle（在 Content 下）
             var contentTr = root.Find("Panel/CollectInfoPanel/Scroll View/Viewport/Content");
             if (contentTr != null) {
