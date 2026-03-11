@@ -12,6 +12,14 @@ namespace JoyCastle.BugReporter.Editor {
         public int callbackOrder => 0;
 
         public void OnPreprocessBuild(BuildReport report) {
+            GenerateBuildInfo();
+        }
+
+        /// <summary>
+        /// Editor 菜单：手动生成 BuildInfo.json（无需真正打包）。
+        /// </summary>
+        [MenuItem("BugReporter/Generate BuildInfo")]
+        public static void GenerateBuildInfo() {
             var info = new BuildInfoData {
                 gitBranch = GetGitBranch(),
                 gitCommit = GetGitCommit(),
