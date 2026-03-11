@@ -19,6 +19,7 @@ namespace JoyCastle.BugReporter {
                 fields["gitCommit"] = info.gitCommit ?? "";
                 fields["buildNumber"] = info.buildNumber ?? "";
                 fields["buildTime"] = info.buildTime ?? "";
+                fields["submoduleBranches"] = info.submoduleBranches ?? "";
             }
 
             return new CollectResult { Fields = fields };
@@ -30,6 +31,7 @@ namespace JoyCastle.BugReporter {
             public string gitCommit;
             public string buildNumber;
             public string buildTime;
+            public string submoduleBranches;
         }
     }
 }

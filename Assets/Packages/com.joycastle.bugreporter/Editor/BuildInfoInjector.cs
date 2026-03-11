@@ -17,6 +17,7 @@ namespace JoyCastle.BugReporter.Editor {
                 gitCommit = GetGitCommit(),
                 buildNumber = GetBuildNumber(),
                 buildTime = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
+                submoduleBranches = GetSubmoduleBranches(),
             };
 
             var dir = Path.Combine(Application.dataPath,
@@ -27,7 +28,7 @@ namespace JoyCastle.BugReporter.Editor {
             File.WriteAllText(Path.Combine(dir, "BuildInfo.json"), json);
             AssetDatabase.Refresh();
 
-            Debug.Log($"[BugReporter] BuildInfo injected: branch={info.gitBranch}, commit={info.gitCommit}");
+            Debug.Log($"[BugReporter] BuildInfo injected: branch={info.gitBranch}, commit={info.gitCommit}, submodules={info.submoduleBranches}");
         }
 
         private static string GetGitBranch() {
@@ -46,6 +47,30 @@ namespace JoyCastle.BugReporter.Editor {
 
         private static string GetBuildNumber() {
             return Environment.GetEnvironmentVariable("BUILD_NUMBER") ?? "0";
+        }
+
+        /// <summary>
+        /// 获取所有 git 子模块的当前分支信息。
+        /// 格式: "子模块名:分支名" 多个以逗号分隔，如 "configRepo:develop,dataRepo:main"
+        /// </summary>
+        private static string GetSubmoduleBranches() {
+            try {
+                var psi = new ProcessStartInfo("git",
+                    "submodule foreach --quiet \"echo $name:$(git rev-parse --abbrev-ref HEAD)\"") {
+                    WorkingDirectory = Application.dataPath,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                using var process = Process.Start(psi);
+                var output = process.StandardOutput.ReadToEnd().Trim();
+                process.WaitForExit();
+                if (process.ExitCode != 0 || string.IsNullOrEmpty(output)) return "";
+                // 每行一个子模块，合并为逗号分隔
+                return output.Replace("\r\n", ",").Replace("\n", ",");
+            } catch {
+                return "";
+            }
         }
 
         private static string RunGit(string args) {
@@ -71,6 +96,7 @@ namespace JoyCastle.BugReporter.Editor {
             public string gitCommit;
             public string buildNumber;
             public string buildTime;
+            public string submoduleBranches;
         }
     }
 }
