@@ -49,6 +49,18 @@ namespace JoyCastle.BugReporter {
             s_collectors.Insert(0, collector);
         }
 
+        /// <summary>
+        /// 设置 Dropdown 字段的默认选中值。
+        /// 在 Init 之后、ShowReportUI 之前调用。
+        /// 优先级：项目方设置 > 服务器 preferences > 第一个选项。
+        /// </summary>
+        /// <param name="fieldKey">字段 key，如 "discovery_version"、"resolve_version"、"priority" 等</param>
+        /// <param name="value">选项的 value 或 label</param>
+        public static void SetDefaultValue(string fieldKey, string value) {
+            EnsureInitialized();
+            s_fieldMetadata.SetDefaultValue(fieldKey, value);
+        }
+
         public static void ShowReportUI() {
             EnsureInitialized();
             if (!s_fieldMetadata.IsReady) {

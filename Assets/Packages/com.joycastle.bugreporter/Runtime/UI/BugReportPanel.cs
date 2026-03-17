@@ -297,7 +297,8 @@ namespace JoyCastle.BugReporter {
         }
 
         /// <summary>
-        /// 根据服务器返回的 preferences 预选 Dropdown 值。
+        /// 根据默认值预选 Dropdown。优先级：项目方设置 > 服务器 preferences > 第一个选项。
+        /// 匹配顺序：精确匹配 value/label > 模糊匹配 label 包含传入值。
         /// </summary>
         private void ApplyPreferences(FieldMetadataManager metadata) {
             foreach (var kv in _dynamicDropdowns) {
@@ -305,14 +306,27 @@ namespace JoyCastle.BugReporter {
                 var dropdown = kv.Value;
                 if (dropdown == null) continue;
 
-                var prefValue = metadata.GetPreference(fieldKey);
-                if (string.IsNullOrEmpty(prefValue)) continue;
+                var defaultValue = metadata.GetDefaultValue(fieldKey);
+                if (string.IsNullOrEmpty(defaultValue)) continue;
 
                 var fieldDef = metadata.Get(fieldKey);
                 if (fieldDef?.options == null) continue;
 
+                // 先精确匹配 value 或 label
+                var matched = false;
                 for (var i = 0; i < fieldDef.options.Count; i++) {
-                    if (fieldDef.options[i].value == prefValue || fieldDef.options[i].label == prefValue) {
+                    if (fieldDef.options[i].value == defaultValue || fieldDef.options[i].label == defaultValue) {
+                        dropdown.value = i;
+                        dropdown.RefreshShownValue();
+                        matched = true;
+                        break;
+                    }
+                }
+                if (matched) continue;
+
+                // 再模糊匹配（label 包含传入值）
+                for (var i = 0; i < fieldDef.options.Count; i++) {
+                    if (fieldDef.options[i].label.Contains(defaultValue)) {
                         dropdown.value = i;
                         dropdown.RefreshShownValue();
                         break;

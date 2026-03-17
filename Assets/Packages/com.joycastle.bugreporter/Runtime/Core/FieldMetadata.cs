@@ -31,6 +31,7 @@ namespace JoyCastle.BugReporter {
     public class FieldMetadataManager {
         private readonly Dictionary<string, FieldDefinition> _fieldMap = new();
         private Dictionary<string, string> _preferences = new();
+        private readonly Dictionary<string, string> _defaultValues = new();
         private bool _ready;
 
         public bool IsReady => _ready;
@@ -60,6 +61,24 @@ namespace JoyCastle.BugReporter {
         /// </summary>
         public string GetPreference(string fieldKey) {
             return _preferences.TryGetValue(fieldKey, out var val) ? val : null;
+        }
+
+        /// <summary>
+        /// 项目方设置 Dropdown 字段的默认值（优先级高于服务器 preferences）。
+        /// </summary>
+        public void SetDefaultValue(string fieldKey, string value) {
+            if (!string.IsNullOrEmpty(fieldKey)) {
+                _defaultValues[fieldKey] = value;
+            }
+        }
+
+        /// <summary>
+        /// 获取字段的默认选中值。优先级：项目方设置 > 服务器 preferences。
+        /// </summary>
+        public string GetDefaultValue(string fieldKey) {
+            if (_defaultValues.TryGetValue(fieldKey, out var val)) return val;
+            if (_preferences.TryGetValue(fieldKey, out val)) return val;
+            return null;
         }
 
         /// <summary>
