@@ -58,13 +58,13 @@ namespace JoyCastle.BugReporter.Editor {
         }
 
         /// <summary>
-        /// 获取所有 git 子模块的当前分支信息。
-        /// 格式: "子模块名:分支名" 多个以逗号分隔，如 "configRepo:develop,dataRepo:main"
+        /// 获取所有 git 子模块的最近一次 commit id。
+        /// 格式: "子模块名:commitId" 多个以逗号分隔，如 "configRepo:a1b2c3d,dataRepo:e4f5g6h"
         /// </summary>
         private static string GetSubmoduleBranches() {
             try {
                 var psi = new ProcessStartInfo("git",
-                    "submodule foreach --quiet \"echo $name:$(git rev-parse --abbrev-ref HEAD)\"") {
+                    "submodule foreach --quiet \"echo $name:$(git rev-parse --short HEAD)\"") {
                     WorkingDirectory = Application.dataPath,
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
