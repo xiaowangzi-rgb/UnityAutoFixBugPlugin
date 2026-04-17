@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace JoyCastle.BugReporter {
@@ -6,21 +7,33 @@ namespace JoyCastle.BugReporter {
         public string Key => "screenshot";
         public bool IsEnabled { get; set; } = true;
 
-        private byte[] _lastScreenshot;
+        private readonly List<byte[]> _screenshots = new();
+
+        public int Count => _screenshots.Count;
+        public IReadOnlyList<byte[]> Screenshots => _screenshots;
 
         public IEnumerator CaptureScreenshot() {
             yield return new WaitForEndOfFrame();
             var tex = new Texture2D(Screen.width, Screen.height, TextureFormat.RGB24, false);
             tex.ReadPixels(new Rect(0, 0, Screen.width, Screen.height), 0, 0);
             tex.Apply();
-            _lastScreenshot = tex.EncodeToPNG();
+            _screenshots.Add(tex.EncodeToPNG());
             Object.Destroy(tex);
+        }
+
+        public void RemoveAt(int index) {
+            if (index < 0 || index >= _screenshots.Count) return;
+            _screenshots.RemoveAt(index);
+        }
+
+        public void Clear() {
+            _screenshots.Clear();
         }
 
         public CollectResult Collect() {
             var result = new CollectResult();
-            if (_lastScreenshot != null) {
-                result.Files["screenshot"] = _lastScreenshot;
+            for (var i = 0; i < _screenshots.Count; i++) {
+                result.Files[$"screenshot_{i}"] = _screenshots[i];
             }
             return result;
         }

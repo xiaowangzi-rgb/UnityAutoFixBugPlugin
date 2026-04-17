@@ -195,6 +195,7 @@ namespace JoyCastle.BugReporter {
 
             try {
                 var json = request.downloadHandler.text;
+                Debug.Log("json :" + json);
                 var response = JsonUtility.FromJson<FieldsResponse>(json);
                 if (response?.fields == null || response.fields.Count == 0) {
                     Debug.LogError("[BugReporter] Field metadata is empty. Bug reporting disabled.");

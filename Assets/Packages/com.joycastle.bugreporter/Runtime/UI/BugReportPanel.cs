@@ -39,8 +39,10 @@ namespace JoyCastle.BugReporter {
         private GameObject _videoItem;
         private GameObject _foldItem;
         private GameObject _dropdownTemplate; // InputPrefab_Dropdown 模板
-        private GameObject _screenshotPreview; // 动态创建的截图预览界面
-        private bool _hasScreenshot; // 是否已截图
+        private GameObject _screenshotGallery; // 动态创建的截图相册界面
+        private Transform _galleryContent;     // 相册内部网格容器
+        private GameObject _fullscreenPreview; // 从相册中点开的全屏预览
+        private readonly List<Texture2D> _galleryTextures = new(); // 缩略图纹理，便于释放
 
         // 动态 Dropdown：field_key → (Dropdown, FieldDefinition)
         private readonly Dictionary<string, Dropdown> _dynamicDropdowns = new();
@@ -108,8 +110,14 @@ namespace JoyCastle.BugReporter {
                 _videoItem = null;
                 _foldItem = null;
                 _dropdownTemplate = null;
-                _screenshotPreview = null;
-                _hasScreenshot = false;
+                _screenshotGallery = null;
+                _galleryContent = null;
+                _fullscreenPreview = null;
+                foreach (var tex in _galleryTextures) {
+                    if (tex != null) Destroy(tex);
+                }
+                _galleryTextures.Clear();
+                BugReporterSDK.GetScreenshotCollector()?.Clear();
                 _dynamicDropdowns.Clear();
                 _dynamicDropdownItems.Clear();
                 _infoExpanded = false;
@@ -410,41 +418,40 @@ namespace JoyCastle.BugReporter {
             PopulateInfoList(_cachedFields);
         }
 
-        // ── GetScreenShot_Btn: 截图 / 预览 ──
+        // ── GetScreenShot_Btn: 多截图 / 相册 ──
+
+        private int GetScreenshotCount() {
+            return BugReporterSDK.GetScreenshotCollector()?.Count ?? 0;
+        }
 
         private void OnScreenshotBtnClicked() {
-            if (!_hasScreenshot) {
-                // 还没截图 → 执行截图
-                _screenshotBtn.interactable = false;
-                _panelInstance.SetActive(false);
-                // 面板被隐藏后 StartCoroutine 不能在自身执行，借用 SDK 的 MonoBehaviour
-                BugReporterSDK.GetInstance().StartCoroutine(DoCaptureScreenshot());
+            if (GetScreenshotCount() == 0) {
+                CaptureNewScreenshot();
             } else {
-                // 已截图 → 弹出预览
-                ShowScreenshotPreview();
+                ShowScreenshotGallery();
             }
+        }
+
+        private void CaptureNewScreenshot() {
+            if (_screenshotBtn != null) _screenshotBtn.interactable = false;
+            _panelInstance.SetActive(false);
+            // 面板被隐藏后 StartCoroutine 不能在自身执行，借用 SDK 的 MonoBehaviour
+            BugReporterSDK.GetInstance().StartCoroutine(DoCaptureScreenshot());
         }
 
         private IEnumerator DoCaptureScreenshot() {
             var screenshotCollector = BugReporterSDK.GetScreenshotCollector();
             if (screenshotCollector is { IsEnabled: true }) {
                 yield return screenshotCollector.CaptureScreenshot();
-
-                var result = screenshotCollector.Collect();
-                if (result.Files != null &&
-                    result.Files.TryGetValue("screenshot", out var pngBytes) &&
-                    pngBytes != null) {
-                    _cachedFiles["screenshot"] = pngBytes;
-                    _hasScreenshot = true;
-                }
+                RefreshScreenshotCache();
             }
 
             // 重新显示面板
             _panelInstance.SetActive(true);
 
-            // 更新按钮文字
-            if (_hasScreenshot && _screenshotBtnText != null) {
-                _screenshotBtnText.text = "预览截图";
+            // 若相册已打开，刷新其内容
+            if (_screenshotGallery != null) {
+                RebuildGallery();
             }
 
             if (_screenshotBtn != null) {
@@ -452,78 +459,309 @@ namespace JoyCastle.BugReporter {
             }
         }
 
-        private void ShowScreenshotPreview() {
-            if (_screenshotPreview != null) return;
-            if (_cachedFiles == null || !_cachedFiles.TryGetValue("screenshot", out var png) || png == null) return;
+        /// <summary>
+        /// 将采集器当前的所有截图同步到 _cachedFiles（清理旧的 screenshot_* / screenshot 键后重建）。
+        /// </summary>
+        private void RefreshScreenshotCache() {
+            _cachedFiles ??= new Dictionary<string, byte[]>();
 
-            // 创建全屏遮罩
-            var previewGo = new GameObject("ScreenshotPreview", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            previewGo.transform.SetParent(_panelInstance.transform, false);
-            var previewRt = previewGo.GetComponent<RectTransform>();
-            previewRt.anchorMin = Vector2.zero;
-            previewRt.anchorMax = Vector2.one;
-            previewRt.offsetMin = Vector2.zero;
-            previewRt.offsetMax = Vector2.zero;
-            var bgImage = previewGo.GetComponent<Image>();
-            bgImage.color = new Color(0, 0, 0, 0.9f);
+            var keysToRemove = new List<string>();
+            foreach (var key in _cachedFiles.Keys) {
+                if (key == "screenshot" || key.StartsWith("screenshot_")) {
+                    keysToRemove.Add(key);
+                }
+            }
+            foreach (var key in keysToRemove) _cachedFiles.Remove(key);
 
-            // 截图 RawImage
-            var rawImgGo = new GameObject("ScreenshotImage", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage));
-            rawImgGo.transform.SetParent(previewGo.transform, false);
-            var rawImgRt = rawImgGo.GetComponent<RectTransform>();
-            rawImgRt.anchorMin = new Vector2(0.05f, 0.1f);
-            rawImgRt.anchorMax = new Vector2(0.95f, 0.9f);
-            rawImgRt.offsetMin = Vector2.zero;
-            rawImgRt.offsetMax = Vector2.zero;
-            var rawImage = rawImgGo.GetComponent<RawImage>();
-
-            var tex = new Texture2D(2, 2);
-            if (tex.LoadImage(png)) {
-                rawImage.texture = tex;
+            var collector = BugReporterSDK.GetScreenshotCollector();
+            if (collector != null) {
+                var result = collector.Collect();
+                if (result.Files != null) {
+                    foreach (var kv in result.Files) {
+                        _cachedFiles[kv.Key] = kv.Value;
+                    }
+                }
             }
 
-            // 关闭按钮（右上角）
-            var closeBtnGo = new GameObject("CloseBtn", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
-            closeBtnGo.transform.SetParent(previewGo.transform, false);
+            UpdateScreenshotBtnText();
+        }
+
+        private void UpdateScreenshotBtnText() {
+            if (_screenshotBtnText == null) return;
+            var count = GetScreenshotCount();
+            _screenshotBtnText.text = count > 0 ? $"截图预览({count})" : "获取截图";
+        }
+
+        private void ShowScreenshotGallery() {
+            if (_screenshotGallery != null) {
+                RebuildGallery();
+                return;
+            }
+
+            // 全屏遮罩
+            var galleryGo = new GameObject("ScreenshotGallery", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            galleryGo.transform.SetParent(_panelInstance.transform, false);
+            var galleryRt = galleryGo.GetComponent<RectTransform>();
+            galleryRt.anchorMin = Vector2.zero;
+            galleryRt.anchorMax = Vector2.one;
+            galleryRt.offsetMin = Vector2.zero;
+            galleryRt.offsetMax = Vector2.zero;
+            galleryGo.GetComponent<Image>().color = new Color(0, 0, 0, 0.92f);
+
+            // 标题
+            var titleGo = new GameObject("Title", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+            titleGo.transform.SetParent(galleryGo.transform, false);
+            var titleRt = titleGo.GetComponent<RectTransform>();
+            titleRt.anchorMin = new Vector2(0, 1);
+            titleRt.anchorMax = new Vector2(1, 1);
+            titleRt.pivot = new Vector2(0.5f, 1);
+            titleRt.anchoredPosition = new Vector2(0, -20);
+            titleRt.sizeDelta = new Vector2(0, 60);
+            var titleText = titleGo.GetComponent<Text>();
+            titleText.text = "截图相册";
+            titleText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            titleText.fontSize = 40;
+            titleText.color = Color.white;
+            titleText.alignment = TextAnchor.MiddleCenter;
+
+            // ScrollRect
+            var scrollGo = new GameObject("Scroll", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(ScrollRect));
+            scrollGo.transform.SetParent(galleryGo.transform, false);
+            var scrollRt = scrollGo.GetComponent<RectTransform>();
+            scrollRt.anchorMin = new Vector2(0.05f, 0.18f);
+            scrollRt.anchorMax = new Vector2(0.95f, 0.88f);
+            scrollRt.offsetMin = Vector2.zero;
+            scrollRt.offsetMax = Vector2.zero;
+            scrollGo.GetComponent<Image>().color = new Color(0.1f, 0.1f, 0.1f, 0.6f);
+            var scroll = scrollGo.GetComponent<ScrollRect>();
+
+            var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Mask));
+            viewportGo.transform.SetParent(scrollGo.transform, false);
+            var viewportRt = viewportGo.GetComponent<RectTransform>();
+            viewportRt.anchorMin = Vector2.zero;
+            viewportRt.anchorMax = Vector2.one;
+            viewportRt.offsetMin = Vector2.zero;
+            viewportRt.offsetMax = Vector2.zero;
+            viewportGo.GetComponent<Image>().color = new Color(1, 1, 1, 0.01f);
+            viewportGo.GetComponent<Mask>().showMaskGraphic = false;
+
+            var contentGo = new GameObject("Content", typeof(RectTransform), typeof(GridLayoutGroup), typeof(ContentSizeFitter));
+            contentGo.transform.SetParent(viewportGo.transform, false);
+            var contentRt = contentGo.GetComponent<RectTransform>();
+            contentRt.anchorMin = new Vector2(0, 1);
+            contentRt.anchorMax = new Vector2(1, 1);
+            contentRt.pivot = new Vector2(0.5f, 1);
+            contentRt.anchoredPosition = Vector2.zero;
+            contentRt.sizeDelta = new Vector2(0, 0);
+            var grid = contentGo.GetComponent<GridLayoutGroup>();
+            grid.cellSize = new Vector2(400, 240); // 横屏游戏：5:3 比例的单元格
+            grid.spacing = new Vector2(20, 20);
+            grid.padding = new RectOffset(20, 20, 20, 20);
+            grid.childAlignment = TextAnchor.UpperLeft;
+            var sizeFitter = contentGo.GetComponent<ContentSizeFitter>();
+            sizeFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            scroll.content = contentRt;
+            scroll.viewport = viewportRt;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+
+            _galleryContent = contentGo.transform;
+
+            // 关闭按钮
+            var closeBtnGo = CreateTextButton(galleryGo.transform, "X", new Color(0.8f, 0.2f, 0.2f, 1f), Color.white, 36);
             var closeBtnRt = closeBtnGo.GetComponent<RectTransform>();
             closeBtnRt.anchorMin = new Vector2(1, 1);
             closeBtnRt.anchorMax = new Vector2(1, 1);
             closeBtnRt.pivot = new Vector2(1, 1);
             closeBtnRt.anchoredPosition = new Vector2(-20, -20);
             closeBtnRt.sizeDelta = new Vector2(80, 80);
-            var closeBtnImg = closeBtnGo.GetComponent<Image>();
-            closeBtnImg.color = new Color(0.8f, 0.2f, 0.2f, 1f);
+            closeBtnGo.GetComponent<Button>().onClick.AddListener(CloseScreenshotGallery);
 
-            // 关闭按钮文字 "X"
-            var closeTextGo = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
-            closeTextGo.transform.SetParent(closeBtnGo.transform, false);
-            var closeTextRt = closeTextGo.GetComponent<RectTransform>();
-            closeTextRt.anchorMin = Vector2.zero;
-            closeTextRt.anchorMax = Vector2.one;
-            closeTextRt.offsetMin = Vector2.zero;
-            closeTextRt.offsetMax = Vector2.zero;
-            var closeText = closeTextGo.GetComponent<Text>();
-            closeText.text = "X";
-            closeText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            closeText.fontSize = 36;
-            closeText.color = Color.white;
-            closeText.alignment = TextAnchor.MiddleCenter;
+            // 添加截图按钮
+            var addBtnGo = CreateTextButton(galleryGo.transform, "+ 添加截图", new Color(0.2f, 0.6f, 0.2f, 1f), Color.white, 32);
+            var addBtnRt = addBtnGo.GetComponent<RectTransform>();
+            addBtnRt.anchorMin = new Vector2(0.5f, 0);
+            addBtnRt.anchorMax = new Vector2(0.5f, 0);
+            addBtnRt.pivot = new Vector2(0.5f, 0);
+            addBtnRt.anchoredPosition = new Vector2(0, 30);
+            addBtnRt.sizeDelta = new Vector2(320, 90);
+            addBtnGo.GetComponent<Button>().onClick.AddListener(CaptureNewScreenshot);
 
-            closeBtnGo.GetComponent<Button>().onClick.AddListener(CloseScreenshotPreview);
-
-            _screenshotPreview = previewGo;
+            _screenshotGallery = galleryGo;
+            RebuildGallery();
         }
 
-        private void CloseScreenshotPreview() {
-            if (_screenshotPreview != null) {
-                // 释放预览用的纹理
-                var rawImage = _screenshotPreview.GetComponentInChildren<RawImage>();
-                if (rawImage != null && rawImage.texture is Texture2D tex) {
-                    Destroy(tex);
-                }
-                Destroy(_screenshotPreview);
-                _screenshotPreview = null;
+        private void RebuildGallery() {
+            if (_galleryContent == null) return;
+
+            // 释放旧缩略图纹理
+            foreach (var tex in _galleryTextures) {
+                if (tex != null) Destroy(tex);
             }
+            _galleryTextures.Clear();
+
+            for (var i = _galleryContent.childCount - 1; i >= 0; i--) {
+                Destroy(_galleryContent.GetChild(i).gameObject);
+            }
+
+            var collector = BugReporterSDK.GetScreenshotCollector();
+            if (collector == null) return;
+
+            for (var i = 0; i < collector.Count; i++) {
+                var index = i;
+                var pngBytes = collector.Screenshots[i];
+                if (pngBytes == null) continue;
+
+                // 单元格
+                var cellGo = new GameObject($"Thumb_{i}", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+                cellGo.transform.SetParent(_galleryContent, false);
+                cellGo.GetComponent<Image>().color = new Color(0.2f, 0.2f, 0.2f, 1f);
+                cellGo.GetComponent<Button>().onClick.AddListener(() => ShowFullscreenPreview(pngBytes));
+
+                // 缩略图 —— 用 AspectRatioFitter 保持截图真实比例（横屏游戏自动展示为横向）
+                var rawImgGo = new GameObject("Image",
+                    typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage), typeof(AspectRatioFitter));
+                rawImgGo.transform.SetParent(cellGo.transform, false);
+                var rawImgRt = rawImgGo.GetComponent<RectTransform>();
+                rawImgRt.anchorMin = Vector2.zero;
+                rawImgRt.anchorMax = Vector2.one;
+                rawImgRt.offsetMin = new Vector2(5, 5);
+                rawImgRt.offsetMax = new Vector2(-5, -5);
+                var tex = new Texture2D(2, 2);
+                var fitter = rawImgGo.GetComponent<AspectRatioFitter>();
+                fitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+                if (tex.LoadImage(pngBytes) && tex.height > 0) {
+                    rawImgGo.GetComponent<RawImage>().texture = tex;
+                    fitter.aspectRatio = (float)tex.width / tex.height;
+                    _galleryTextures.Add(tex);
+                }
+
+                // 删除按钮
+                var delBtnGo = CreateTextButton(cellGo.transform, "×", new Color(0.85f, 0.2f, 0.2f, 1f), Color.white, 32);
+                var delBtnRt = delBtnGo.GetComponent<RectTransform>();
+                delBtnRt.anchorMin = new Vector2(1, 1);
+                delBtnRt.anchorMax = new Vector2(1, 1);
+                delBtnRt.pivot = new Vector2(1, 1);
+                delBtnRt.anchoredPosition = new Vector2(-5, -5);
+                delBtnRt.sizeDelta = new Vector2(55, 55);
+                delBtnGo.GetComponent<Button>().onClick.AddListener(() => DeleteScreenshot(index));
+
+                // 序号
+                var numGo = new GameObject("Number", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+                numGo.transform.SetParent(cellGo.transform, false);
+                var numRt = numGo.GetComponent<RectTransform>();
+                numRt.anchorMin = new Vector2(0, 0);
+                numRt.anchorMax = new Vector2(0, 0);
+                numRt.pivot = new Vector2(0, 0);
+                numRt.anchoredPosition = new Vector2(10, 10);
+                numRt.sizeDelta = new Vector2(80, 40);
+                var numText = numGo.GetComponent<Text>();
+                numText.text = $"#{i + 1}";
+                numText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                numText.fontSize = 28;
+                numText.color = Color.white;
+                numText.alignment = TextAnchor.LowerLeft;
+            }
+        }
+
+        private void DeleteScreenshot(int index) {
+            var collector = BugReporterSDK.GetScreenshotCollector();
+            if (collector == null) return;
+            collector.RemoveAt(index);
+            RefreshScreenshotCache();
+            if (collector.Count == 0) {
+                CloseScreenshotGallery();
+            } else {
+                RebuildGallery();
+            }
+        }
+
+        private void ShowFullscreenPreview(byte[] png) {
+            if (_fullscreenPreview != null || png == null) return;
+
+            var root = _screenshotGallery != null ? _screenshotGallery.transform : _panelInstance.transform;
+            var previewGo = new GameObject("FullscreenPreview", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            previewGo.transform.SetParent(root, false);
+            var previewRt = previewGo.GetComponent<RectTransform>();
+            previewRt.anchorMin = Vector2.zero;
+            previewRt.anchorMax = Vector2.one;
+            previewRt.offsetMin = Vector2.zero;
+            previewRt.offsetMax = Vector2.zero;
+            previewGo.GetComponent<Image>().color = new Color(0, 0, 0, 0.96f);
+
+            var rawImgGo = new GameObject("Image",
+                typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage), typeof(AspectRatioFitter));
+            rawImgGo.transform.SetParent(previewGo.transform, false);
+            var rawImgRt = rawImgGo.GetComponent<RectTransform>();
+            rawImgRt.anchorMin = new Vector2(0.05f, 0.1f);
+            rawImgRt.anchorMax = new Vector2(0.95f, 0.9f);
+            rawImgRt.offsetMin = Vector2.zero;
+            rawImgRt.offsetMax = Vector2.zero;
+            var tex = new Texture2D(2, 2);
+            var previewFitter = rawImgGo.GetComponent<AspectRatioFitter>();
+            previewFitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            if (tex.LoadImage(png) && tex.height > 0) {
+                rawImgGo.GetComponent<RawImage>().texture = tex;
+                previewFitter.aspectRatio = (float)tex.width / tex.height;
+            }
+
+            var closeBtnGo = CreateTextButton(previewGo.transform, "X", new Color(0.8f, 0.2f, 0.2f, 1f), Color.white, 36);
+            var closeBtnRt = closeBtnGo.GetComponent<RectTransform>();
+            closeBtnRt.anchorMin = new Vector2(1, 1);
+            closeBtnRt.anchorMax = new Vector2(1, 1);
+            closeBtnRt.pivot = new Vector2(1, 1);
+            closeBtnRt.anchoredPosition = new Vector2(-20, -20);
+            closeBtnRt.sizeDelta = new Vector2(80, 80);
+            closeBtnGo.GetComponent<Button>().onClick.AddListener(CloseFullscreenPreview);
+
+            _fullscreenPreview = previewGo;
+        }
+
+        private void CloseFullscreenPreview() {
+            if (_fullscreenPreview == null) return;
+            var rawImage = _fullscreenPreview.GetComponentInChildren<RawImage>();
+            if (rawImage != null && rawImage.texture is Texture2D tex) {
+                Destroy(tex);
+            }
+            Destroy(_fullscreenPreview);
+            _fullscreenPreview = null;
+        }
+
+        private void CloseScreenshotGallery() {
+            CloseFullscreenPreview();
+            foreach (var tex in _galleryTextures) {
+                if (tex != null) Destroy(tex);
+            }
+            _galleryTextures.Clear();
+            if (_screenshotGallery != null) {
+                Destroy(_screenshotGallery);
+                _screenshotGallery = null;
+                _galleryContent = null;
+            }
+            UpdateScreenshotBtnText();
+        }
+
+        private static GameObject CreateTextButton(Transform parent, string label, Color bgColor, Color textColor, int fontSize) {
+            var btnGo = new GameObject("Btn", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+            btnGo.transform.SetParent(parent, false);
+            btnGo.GetComponent<Image>().color = bgColor;
+
+            var textGo = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+            textGo.transform.SetParent(btnGo.transform, false);
+            var textRt = textGo.GetComponent<RectTransform>();
+            textRt.anchorMin = Vector2.zero;
+            textRt.anchorMax = Vector2.one;
+            textRt.offsetMin = Vector2.zero;
+            textRt.offsetMax = Vector2.zero;
+            var text = textGo.GetComponent<Text>();
+            text.text = label;
+            text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            text.fontSize = fontSize;
+            text.color = textColor;
+            text.alignment = TextAnchor.MiddleCenter;
+
+            return btnGo;
         }
 
         // ── FoldBtn: 展开/收起采集信息 ──
