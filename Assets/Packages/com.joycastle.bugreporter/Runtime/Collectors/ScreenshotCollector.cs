@@ -7,7 +7,8 @@ namespace JoyCastle.BugReporter {
         public string Key => "screenshot";
         public bool IsEnabled { get; set; } = true;
 
-        private readonly List<byte[]> _screenshots = new();
+        // 静态存储，跨 BugReportPanel 开关甚至 SDK 重建都保留
+        private static readonly List<byte[]> _screenshots = new();
 
         public int Count => _screenshots.Count;
         public IReadOnlyList<byte[]> Screenshots => _screenshots;

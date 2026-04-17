@@ -117,7 +117,7 @@ namespace JoyCastle.BugReporter {
                     if (tex != null) Destroy(tex);
                 }
                 _galleryTextures.Clear();
-                BugReporterSDK.GetScreenshotCollector()?.Clear();
+                // 注意：截图列表不在这里清理，保证下次打开仍在。清理时机在 DoSubmit 成功后。
                 _dynamicDropdowns.Clear();
                 _dynamicDropdownItems.Clear();
                 _infoExpanded = false;
@@ -414,6 +414,9 @@ namespace JoyCastle.BugReporter {
                     Debug.LogWarning($"[BugReporter] Collector '{collector.Key}' failed: {e.Message}");
                 }
             }
+
+            // 同步上次残留的截图到 _cachedFiles 并刷新按钮文字（N 张）
+            RefreshScreenshotCache();
 
             PopulateInfoList(_cachedFields);
         }
@@ -858,11 +861,18 @@ namespace JoyCastle.BugReporter {
                 }
             }
 
+            var uploadSucceeded = false;
             yield return BugReporterSDK.GetUploader().Upload(report, (success, msg) => {
+                uploadSucceeded = success;
                 Debug.Log(success
                     ? "[BugReporter] Report submitted."
                     : $"[BugReporter] Report failed: {msg}");
             });
+
+            // 上报成功才清空截图，失败时保留以便用户再试
+            if (uploadSucceeded) {
+                BugReporterSDK.GetScreenshotCollector()?.Clear();
+            }
 
             if (_collectBtn != null) {
                 _collectBtn.interactable = true;
